@@ -9,7 +9,7 @@ To use this do something like:
 
 to build in the regular way and:
 
-    ./builder.py srcistd -- --std=c++23
+    ./builder.py srcistd -- --std=c++23 (/std:c++latest with VS)
 
 to use `import std`.
 

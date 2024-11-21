@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os, sys, argparse, pathlib, subprocess
+import os, sys, argparse, pathlib, subprocess, platform
 from concurrent.futures import ThreadPoolExecutor
 
 parser = argparse.ArgumentParser(description='A tool to test import std usage.')
@@ -22,6 +22,29 @@ class GCC:
     def link(self, exename, objfiles):
         cmd = self.cmdarr + ['-o', exename] + objfiles
         subprocess.check_call(cmd)
+
+class VS:
+    def __init__(self):
+        self.compcmd = ['cl']
+        self.linkcmd = ['link']
+
+    def compile(self, source, obj, use_istd, extra_args):
+        if use_istd:
+            sys.exit('Import std not supported for VS yet.')
+        cmd = self.compcmd + ['/nologo',
+                              '/c',
+                              f'/Fo{obj}',
+                              '/EHsc',
+                              source] + extra_args
+        subprocess.check_call(cmd)
+
+    def link(self, exename, objfiles):
+        exename = exename.with_suffix('.exe')
+        cmd = self.linkcmd + ['/nologo',
+                              f'/OUT:{exename}',
+                              '/SUBSYSTEM:CONSOLE'] + objfiles
+        subprocess.check_call(cmd)
+
 
 class BuildSystem:
     def __init__(self, compiler, options):
@@ -51,7 +74,10 @@ class BuildSystem:
 
 if __name__ == '__main__':
     opts = parser.parse_args()
-    compiler = GCC(['c++'], opts)
+    if platform.uname().system == 'Windows':
+        compiler = VS()
+    else:
+        compiler = GCC(['c++'], opts)
     build = BuildSystem(compiler, opts)
     build.build()
 
