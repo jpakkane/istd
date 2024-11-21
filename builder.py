@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os, sys, argparse, pathlib, subprocess
+from concurrent.futures import ThreadPoolExecutor
 
 parser = argparse.ArgumentParser(description='A tool to test import std usage.')
 parser.add_argument('sourcedir')
@@ -12,7 +13,9 @@ class GCC:
     def __init__(self, cmdarr, options):
         self.cmdarr = cmdarr
 
-    def compile(self, source, obj, extra_args):
+    def compile(self, source, obj, use_istd, extra_args):
+        if use_istd:
+            sys.exit('Import std not supported for GCC yet.')
         cmd = self.cmdarr + ['-Wall', '-c', '-o', obj, source] + extra_args
         subprocess.check_call(cmd)
 
@@ -28,15 +31,21 @@ class BuildSystem:
         self.builddir = pathlib.Path(options.sourcedir + '.b')
         self.use_istd = options.sourcedir.endswith('istd')
         self.exefile = self.builddir / 'program'
+        self.num_processes = None
 
     def build(self):
         self.builddir.mkdir(exist_ok=True)
         sources = self.srcdir.glob('*.cpp')
         objfiles = []
-        for s in sources:
-            o = self.builddir / (s.parts[-1] + '.o')
-            self.compiler.compile(s, o, self.extra_args)
-            objfiles.append(o)
+        with ThreadPoolExecutor(self.num_processes) as tp:
+            futures = []
+            for s in sources:
+                o = self.builddir / (s.parts[-1] + '.o')
+                h = tp.submit(self.compiler.compile, s, o, self.use_istd, self.extra_args)
+                objfiles.append(o)
+                futures.append(h)
+            for f in futures:
+                f.result()
         self.compiler.link(self.exefile, objfiles)
 
 
