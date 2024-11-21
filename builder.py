@@ -4,8 +4,11 @@
 
 import os, sys, argparse, pathlib, subprocess, platform
 from concurrent.futures import ThreadPoolExecutor
+import time
+from threading import Lock
 
 parser = argparse.ArgumentParser(description='A tool to test import std usage.')
+parser.add_argument('-j', default=None, type=int)
 parser.add_argument('sourcedir')
 parser.add_argument('args', nargs='*')
 
@@ -13,7 +16,7 @@ class GCC:
     def __init__(self, cmdarr, options):
         self.cmdarr = cmdarr
 
-    def compile(self, source, obj, use_istd, extra_args):
+    def compile(self, builddir, source, obj, use_istd, extra_args):
         if use_istd:
             sys.exit('Import std not supported for GCC yet.')
         cmd = self.cmdarr + ['-Wall', '-c', '-o', obj, source] + extra_args
@@ -28,11 +31,12 @@ class VS:
         self.compcmd = ['cl']
         self.linkcmd = ['link']
         self.vs_root = pathlib.WindowsPath(r'C:\Program Files\Microsoft Visual Studio\2022\Preview\VC\Tools\MSVC\14.43.34604')
+        self.std_lock = Lock()
 
-    def compile(self, source, obj, use_istd, extra_args):
+    def compile(self, builddir, source, obj, use_istd, extra_args):
         retval = None
         if use_istd:
-            retval = self.do_istd(source, obj, extra_args)
+            retval = self.do_istd(builddir, source, obj, extra_args)
             cmd = self.compcmd + ['/nologo',
                                   '/c',
                                   f'/Fo{obj}',
@@ -54,21 +58,27 @@ class VS:
                               '/SUBSYSTEM:CONSOLE'] + objfiles
         subprocess.check_call(cmd)
 
-    def do_istd(self, source, obj, extra_args):
-        builddir = pathlib.WindowsPath(obj.parts[0])
+    def do_istd(self, builddir, source, obj, extra_args):
+        #import msvcrt
+        # These should be passed in as arguments rather than guessed here.
+        lock_filename = builddir / 'toplevel.lock'
         stdobj = builddir / 'std.ixx.o'
         if stdobj.exists():
             return stdobj
-        ddi = builddir / 'std.ixx.obj.ddi'
-        cmd = self.compcmd + ['/nologo',
-                              '-TP',
-                              '/EHsc',
-#                              '-scanDependencies',
-#                              ddi,
-                              '/c',
-                              self.vs_root / 'modules/std.ixx',
-                              f'/Fo{stdobj}'] + extra_args
-        subprocess.check_call(cmd)
+        self.std_lock.acquire()
+        if not stdobj.exists():
+            ddi = builddir / 'std.ixx.obj.ddi'
+            print('Compiling std.')
+            cmd = self.compcmd + ['/nologo',
+                                  '-TP',
+                                  '/EHsc',
+                                  # '-scanDependencies',
+                                  # ddi,
+                                  '/c',
+                                  self.vs_root / 'modules/std.ixx',
+                                  f'/Fo{stdobj}'] + extra_args
+            subprocess.check_call(cmd)
+        self.std_lock.release() # Not exception safe, but we don't care as any error is fatal.
         return stdobj
 
 class BuildSystem:
@@ -79,16 +89,18 @@ class BuildSystem:
         self.builddir = pathlib.Path(options.sourcedir + '.b')
         self.use_istd = options.sourcedir.endswith('istd')
         self.exefile = self.builddir / 'program'
-        self.num_processes = 1
+        self.num_processes = options.j
+        self.lock_file = self.builddir / 'toplevel.lock'
 
     def build(self):
         self.builddir.mkdir(exist_ok=True)
+        self.lock_file.write_text('Enjoy your stay in Qualityland.\n"')
         sources = self.srcdir.glob('*.cpp')
         objfiles = []
         if self.num_processes == 1:
             for s in sources:
                 o = self.builddir / (s.parts[-1] + '.o')
-                stdo = self.compiler.compile(s, o, self.use_istd, self.extra_args)
+                stdo = self.compiler.compile(self.builddir, s, o, self.use_istd, self.extra_args)
                 if stdo is not None and stdo not in objfiles:
                     objfiles.append(stdo)
                 objfiles.append(o)
@@ -97,11 +109,13 @@ class BuildSystem:
                 futures = []
                 for s in sources:
                     o = self.builddir / (s.parts[-1] + '.o')
-                    h = tp.submit(self.compiler.compile, s, o, self.use_istd, self.extra_args)
+                    h = tp.submit(self.compiler.compile, self.builddir, s, o, self.use_istd, self.extra_args)
                     objfiles.append(o)
                     futures.append(h)
                 for f in futures:
-                    f.result()
+                    objfile = f.result()
+                    if objfile is not None and objfile not in objfiles:
+                        objfiles.append(objfile)
         self.compiler.link(self.exefile, objfiles)
 
 
@@ -112,4 +126,7 @@ if __name__ == '__main__':
     else:
         compiler = GCC(['c++'], opts)
     build = BuildSystem(compiler, opts)
+    starttime = time.time()
     build.build()
+    endtime = time.time()
+    print(f'Build took {int(endtime-starttime)} seconds')
