@@ -7,6 +7,17 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 from threading import Lock
 
+# A real compiler would be able to determine which
+# flags matter for import std. In this dummy
+# implementation just hash all of them.
+def compute_hash(system_string, cmd_args):
+    import hashlib
+    h = hashlib.sha256()
+    h.update(system_string.encode())
+    for a in cmd_args:
+        h.update(a.encode())
+    return h.hexdigest()[:6]
+
 parser = argparse.ArgumentParser(description='A tool to test import std usage.')
 parser.add_argument('-j', default=None, type=int)
 parser.add_argument('sourcedir')
@@ -59,9 +70,11 @@ class VS:
         subprocess.check_call(cmd)
 
     def do_istd(self, builddir, source, obj, extra_args):
-        #import msvcrt
-        # These should be passed in as arguments rather than guessed here.
-        lock_filename = builddir / 'toplevel.lock'
+        # FIXME: this hash should be used to select a subdirectory
+        # within the private dir. All import std outputs should go there,
+        # thus avoiding clashes between two std modules built with
+        # different configurations.
+        configuration_hash = compute_hash(self.vs_root, extra_args)
         stdobj = builddir / 'std.ixx.o'
         if stdobj.exists():
             return stdobj
